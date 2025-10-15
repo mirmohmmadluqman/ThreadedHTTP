@@ -1,48 +1,51 @@
-use std::fs;
-use std::io::prelude::*;
-use std::net::TcpListener;
-use std::net::TcpStream;
-use threaded_http::ThreadPool;
+use clap::Parser;
+use std::process;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use threaded_http::{start_server, ServerConfig};
 
-fn main() {
-    let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
-    let pool = ThreadPool::new(4);
-    
-    println!("Server running on http://127.0.0.1:7878");
-    println!("Thread pool size: 4");
-    
-    for stream in listener.incoming() {
-        let stream = stream.unwrap();
-        
-        pool.execute(|| {
-            handle_connection(stream);
-        });
-    }
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(short, long, default_value = "7878")]
+    port: u16,
+
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+
+    #[arg(short = 't', long, default_value = "4")]
+    threads: usize,
+
+    #[arg(short, long)]
+    verbose: bool,
 }
 
-fn handle_connection(mut stream: TcpStream) {
-    let mut buffer = [0; 1024];
-    stream.read(&mut buffer).unwrap();
-    
-    let get = b"GET / HTTP/1.1\r\n";
-    
-    let (status_line, filename) = if buffer.starts_with(get) {
-        ("HTTP/1.1 200 OK", "hello.html")
-    } else {
-        ("HTTP/1.1 404 NOT FOUND", "404.html")
+fn main() {
+    let args = Args::parse();
+
+    let config = ServerConfig {
+        address: format!("{}:{}", args.host, args.port),
+        pool_size: args.threads,
+        verbose: args.verbose,
     };
-    
-    let contents = fs::read_to_string(filename).unwrap_or_else(|_| {
-        String::from("<html><body><h1>Hello from Rust!</h1></body></html>")
+
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown_clone = Arc::clone(&shutdown);
+
+    ctrlc::set_handler(move || {
+        println!("\nReceived shutdown signal...");
+        shutdown_clone.store(true, Ordering::Relaxed);
+    })
+    .unwrap_or_else(|err| {
+        eprintln!("Error setting Ctrl-C handler: {}", err);
     });
-    
-    let response = format!(
-        "{}\r\nContent-Length: {}\r\n\r\n{}",
-        status_line,
-        contents.len(),
-        contents
-    );
-    
-    stream.write(response.as_bytes()).unwrap();
-    stream.flush().unwrap();
+
+    println!("Starting ThreadedHTTP server on {}", config.address);
+    println!("Thread pool size: {}", config.pool_size);
+    println!("Press Ctrl+C to stop\n");
+
+    if let Err(e) = start_server(config, shutdown) {
+        eprintln!("Server error: {}", e);
+        process::exit(1);
+    }
 }
