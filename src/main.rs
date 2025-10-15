@@ -2,16 +2,21 @@ use std::fs;
 use std::io::prelude::*;
 use std::net::TcpListener;
 use std::net::TcpStream;
+use threaded_http::ThreadPool;
 
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
+    let pool = ThreadPool::new(4);
     
     println!("Server running on http://127.0.0.1:7878");
+    println!("Thread pool size: 4");
     
     for stream in listener.incoming() {
         let stream = stream.unwrap();
         
-        handle_connection(stream);
+        pool.execute(|| {
+            handle_connection(stream);
+        });
     }
 }
 
@@ -27,7 +32,6 @@ fn handle_connection(mut stream: TcpStream) {
         ("HTTP/1.1 404 NOT FOUND", "404.html")
     };
     
-    // TODO: Handle file not found error properly
     let contents = fs::read_to_string(filename).unwrap_or_else(|_| {
         String::from("<html><body><h1>Hello from Rust!</h1></body></html>")
     });
